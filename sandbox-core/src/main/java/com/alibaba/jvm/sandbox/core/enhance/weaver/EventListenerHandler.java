@@ -15,6 +15,7 @@ import java.com.alibaba.jvm.sandbox.spy.Spy;
 import java.com.alibaba.jvm.sandbox.spy.SpyHandler;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.alibaba.jvm.sandbox.api.event.Event.Type.IMMEDIATELY_RETURN;
@@ -42,6 +43,9 @@ public class EventListenerHandler implements SpyHandler {
     private final Map<Integer/*LISTENER_ID*/, EventProcessor> mappingOfEventProcessor
             = new ConcurrentHashMap<Integer, EventProcessor>();
 
+    // 冻结标识
+    private AtomicBoolean frozen = new AtomicBoolean(false);
+
     /**
      * 注册事件处理器
      *
@@ -66,7 +70,8 @@ public class EventListenerHandler implements SpyHandler {
      * @param listenerId 事件处理器ID
      */
     public void frozen(int listenerId) {
-        final EventProcessor processor = mappingOfEventProcessor.remove(listenerId);
+        frozen.set(true);
+        final EventProcessor processor = mappingOfEventProcessor.get(listenerId);
         if (null == processor) {
             logger.debug("ignore frozen listener={}, because not found.", listenerId);
             return;
@@ -121,6 +126,9 @@ public class EventListenerHandler implements SpyHandler {
         catch (ProcessControlException pce) {
 
             final EventProcessor.Process process = processor.processRef.get();
+            if (process.isEmptyStack()) {
+                processor.processRef.remove();
+            }
 
             final ProcessControlException.State state = pce.getState();
             logger.debug("on-event: event|{}|{}|{}|{}, process-changed: {}. isIgnoreProcessEvent={};",
@@ -229,6 +237,10 @@ public class EventListenerHandler implements SpyHandler {
                         throwable
                 );
             }
+        } finally {
+            if (frozen.get()) {
+                mappingOfEventProcessor.remove(listenerId);
+            }
         }
 
         // 默认返回不进行任何流程变更
@@ -311,6 +323,11 @@ public class EventListenerHandler implements SpyHandler {
             return newInstanceForNone();
         }
 
+        // 如果已经冻结则不需要响应
+        if (frozen.get()) {
+            return newInstanceForNone();
+        }
+
         // 获取事件处理器
         final EventProcessor processor = mappingOfEventProcessor.get(listenerId);
 
@@ -358,18 +375,18 @@ public class EventListenerHandler implements SpyHandler {
 
     @Override
     public Spy.Ret handleOnThrows(int listenerId, Throwable throwable) throws Throwable {
-        try{
+        try {
             return handleOnEnd(listenerId, throwable, false);
-        }finally {
+        } finally {
             BusinessClassLoaderHolder.removeBussinessClassLoader();
         }
     }
 
     @Override
     public Spy.Ret handleOnReturn(int listenerId, Object object) throws Throwable {
-        try{
+        try {
             return handleOnEnd(listenerId, object, true);
-        }finally {
+        } finally {
             BusinessClassLoaderHolder.removeBussinessClassLoader();
         }
     }
@@ -384,6 +401,12 @@ public class EventListenerHandler implements SpyHandler {
             logger.debug("listener={} is in protecting, ignore processing {}-event", listenerId, isReturn ? "return" : "throws");
             return newInstanceForNone();
         }
+
+        // 如果已经冻结则不需要响应
+        if (frozen.get()) {
+            return newInstanceForNone();
+        }
+
 
         final EventProcessor wrap = mappingOfEventProcessor.get(listenerId);
 
@@ -400,6 +423,7 @@ public class EventListenerHandler implements SpyHandler {
         // 2. super.<init>
         // 处理方式是直接返回,不做任何事件的处理和代码流程的改变,放弃对super.<init>的观察，可惜了
         if (process.isEmptyStack()) {
+            wrap.processRef.remove();
             return newInstanceForNone();
         }
 
@@ -451,6 +475,11 @@ public class EventListenerHandler implements SpyHandler {
             return;
         }
 
+        // 如果已经冻结则不需要响应
+        if (frozen.get()) {
+            return;
+        }
+
         final EventProcessor wrap = mappingOfEventProcessor.get(listenerId);
         if (null == wrap) {
             logger.debug("listener={} is not activated, ignore processing call-before-event.", listenerId);
@@ -465,6 +494,7 @@ public class EventListenerHandler implements SpyHandler {
         //    super.<init>会导致CALL_BEFORE事件优先于BEFORE事件
         // 但如果按照现在的架构要兼容这种情况，比较麻烦，所以暂时先放弃了这部分的消息，可惜可惜
         if (process.isEmptyStack()) {
+            wrap.processRef.remove();
             return;
         }
 
@@ -495,6 +525,11 @@ public class EventListenerHandler implements SpyHandler {
             return;
         }
 
+        // 如果已经冻结则不需要响应
+        if (frozen.get()) {
+            return;
+        }
+
         final EventProcessor wrap = mappingOfEventProcessor.get(listenerId);
         if (null == wrap) {
             logger.debug("listener={} is not activated, ignore processing call-return-event.", listenerId);
@@ -503,6 +538,7 @@ public class EventListenerHandler implements SpyHandler {
 
         final EventProcessor.Process process = wrap.processRef.get();
         if (process.isEmptyStack()) {
+            wrap.processRef.remove();
             return;
         }
 
@@ -533,6 +569,11 @@ public class EventListenerHandler implements SpyHandler {
             return;
         }
 
+        // 如果已经冻结则不需要响应
+        if (frozen.get()) {
+            return;
+        }
+
         final EventProcessor wrap = mappingOfEventProcessor.get(listenerId);
         if (null == wrap) {
             logger.debug("listener={} is not activated, ignore processing call-throws-event.", listenerId);
@@ -541,6 +582,7 @@ public class EventListenerHandler implements SpyHandler {
 
         final EventProcessor.Process process = wrap.processRef.get();
         if (process.isEmptyStack()) {
+            wrap.processRef.remove();
             return;
         }
 
@@ -570,6 +612,10 @@ public class EventListenerHandler implements SpyHandler {
             logger.debug("listener={} is in protecting, ignore processing call-line-event", listenerId);
             return;
         }
+        // 如果已经冻结则不需要响应
+        if (frozen.get()) {
+            return;
+        }
 
         final EventProcessor wrap = mappingOfEventProcessor.get(listenerId);
         if (null == wrap) {
@@ -582,6 +628,7 @@ public class EventListenerHandler implements SpyHandler {
         // 如果当前调用过程信息堆栈是空的,说明BEFORE/LINE错位
         // 处理方式是直接返回,不做任何事件的处理和代码流程的改变
         if (process.isEmptyStack()) {
+            wrap.processRef.remove();
             return;
         }
 
