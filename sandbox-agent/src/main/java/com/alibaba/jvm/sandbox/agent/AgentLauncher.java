@@ -102,6 +102,7 @@ public class AgentLauncher {
      * @param inst          inst
      */
     public static void agentmain(String featureString, Instrumentation inst) {
+        System.gc();
         LAUNCH_MODE = LAUNCH_MODE_ATTACH;
         final Map<String, String> featureMap = toFeatureMap(featureString);
         writeAttachResult(
@@ -355,12 +356,12 @@ public class AgentLauncher {
 
     // 获取主目录
     private static String getSandboxHome(final Map<String, String> featureMap) {
-        String home =  getDefault(featureMap, KEY_SANDBOX_HOME, DEFAULT_SANDBOX_HOME);
-        if( isWindows() ){
+        String home = getDefault(featureMap, KEY_SANDBOX_HOME, DEFAULT_SANDBOX_HOME);
+        if (isWindows()) {
             Matcher m = Pattern.compile("(?i)^[/\\\\]([a-z])[/\\\\]").matcher(home);
-            if( m.find() ){
+            if (m.find()) {
                 home = m.replaceFirst("$1:/");
-            }            
+            }
         }
         return home;
     }
