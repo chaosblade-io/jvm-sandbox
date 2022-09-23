@@ -4,12 +4,11 @@ import com.alibaba.jvm.sandbox.core.CoreConfigure;
 import com.alibaba.jvm.sandbox.core.JvmSandbox;
 import com.alibaba.jvm.sandbox.core.server.CoreServer;
 import com.alibaba.jvm.sandbox.core.server.jetty.servlet.ModuleHttpServlet;
-import com.alibaba.jvm.sandbox.core.server.jetty.servlet.WebSocketAcceptorServlet;
 import com.alibaba.jvm.sandbox.core.util.Initializer;
 import com.alibaba.jvm.sandbox.core.util.LogbackUtils;
 import org.eclipse.jetty.server.Connector;
 import org.eclipse.jetty.server.Server;
-import org.eclipse.jetty.server.nio.SelectChannelConnector;
+import org.eclipse.jetty.server.ServerConnector;
 import org.eclipse.jetty.servlet.ServletContextHandler;
 import org.eclipse.jetty.servlet.ServletHolder;
 import org.eclipse.jetty.util.thread.QueuedThreadPool;
@@ -97,19 +96,19 @@ public class JettyCoreServer implements CoreServer {
             throw new IOException("server was not bind yet.");
         }
 
-        SelectChannelConnector scc = null;
+        ServerConnector scc = null;
         final Connector[] connectorArray = httpServer.getConnectors();
         if (null != connectorArray) {
             for (final Connector connector : connectorArray) {
-                if (connector instanceof SelectChannelConnector) {
-                    scc = (SelectChannelConnector) connector;
+                if (connector instanceof ServerConnector) {
+                    scc = (ServerConnector) connector;
                     break;
                 }//if
             }//for
         }//if
 
         if (null == scc) {
-            throw new IllegalStateException("not found SelectChannelConnector");
+            throw new IllegalStateException("not found ServerConnector");
         }
 
         return new InetSocketAddress(
@@ -128,15 +127,6 @@ public class JettyCoreServer implements CoreServer {
         final String contextPath = "/sandbox/" + namespace;
         context.setContextPath(contextPath);
         context.setClassLoader(getClass().getClassLoader());
-
-        // web-socket-servlet
-        final String wsPathSpec = "/module/websocket/*";
-        logger.info("initializing ws-http-handler. path={}", contextPath + wsPathSpec);
-        //noinspection deprecation
-        context.addServlet(
-                new ServletHolder(new WebSocketAcceptorServlet(jvmSandbox.getCoreModuleManager())),
-                wsPathSpec
-        );
 
         // module-http-servlet
         final String pathSpec = "/module/http/*";
@@ -165,12 +155,24 @@ public class JettyCoreServer implements CoreServer {
             ));
         }
 
-        httpServer = new Server(new InetSocketAddress(serverIp, serverPort));
-        QueuedThreadPool qtp = new QueuedThreadPool();
+//        httpServer = new Server(new InetSocketAddress(serverIp, serverPort));
+//        QueuedThreadPool qtp = new QueuedThreadPool();
+//        // jetty线程设置为daemon，防止应用启动失败进程无法正常退出
+//        qtp.setDaemon(true);
+//        qtp.setName("sandbox-jetty-qtp-" + qtp.hashCode());
+//        httpServer.setThreadPool(qtp);
+
         // jetty线程设置为daemon，防止应用启动失败进程无法正常退出
+        QueuedThreadPool qtp = new QueuedThreadPool();
         qtp.setDaemon(true);
         qtp.setName("sandbox-jetty-qtp-" + qtp.hashCode());
-        httpServer.setThreadPool(qtp);
+        httpServer = new Server(qtp);
+
+        InetSocketAddress addr = new InetSocketAddress(serverIp, serverPort);
+        ServerConnector connector = new ServerConnector(httpServer);
+        connector.setHost(addr.getHostName());
+        connector.setPort(addr.getPort());
+        httpServer.setConnectors(new Connector[]{connector});
     }
 
     @Override
